@@ -134,6 +134,19 @@
   body.portrait .day-col .devents{ flex:1; }
   .day-col .dhead{ display:flex; align-items:baseline; gap:6px; }
   .day-col .devents{ display:flex; flex-direction:column; }
+
+  /* ---- Weekly forecast strip ---- */
+  .forecast-strip{ display:flex; justify-content:space-between; gap:6px; padding:0.9vh 0.2vw; border-bottom:1px solid var(--line); margin-bottom:0.4vh; }
+  .forecast-item{ display:flex; flex-direction:column; align-items:center; flex:1; min-width:0; }
+  .forecast-item .fday{ font-size:0.7rem; text-transform:uppercase; letter-spacing:0.03em; opacity:0.65; }
+  .forecast-item .ficon{ font-size:1.25rem; margin:2px 0; }
+  .forecast-item .fhilo{ font-size:0.74rem; white-space:nowrap; }
+  body.portrait .forecast-strip{ overflow-x:auto; justify-content:flex-start; }
+  body.portrait .forecast-item{ flex:0 0 3.8em; }
+
+  /* ---- Two-week calendar ---- */
+  .week-block{ display:flex; flex-direction:column; gap:10px; }
+  .week-block + .week-block{ margin-top:10px; padding-top:10px; border-top:1px dashed var(--line); }
 </style>
 </head>
 <body class="spring">
@@ -164,6 +177,8 @@
     <div class="gear" id="gearBtn" title="Settings">⚙</div>
   </header>
 
+  <div class="forecast-strip" id="forecastStrip"></div>
+
   <main>
     <section class="panel" id="mealPanel">
       <h2>Dinner This Week</h2>
@@ -181,14 +196,15 @@
 
     <section class="panel" id="calPanel">
       <div class="week-head">
-        <h2 style="border:none;margin:0;padding:0;">Week of <span id="weekLabel"></span></h2>
+        <h2 style="border:none;margin:0;padding:0;">Two Weeks: <span id="weekLabel"></span></h2>
         <div class="week-nav">
           <button id="prevWeek">‹</button>
           <button id="thisWeek">•</button>
           <button id="nextWeek">›</button>
         </div>
       </div>
-      <div class="week-grid" id="weekGrid"></div>
+      <div class="week-block"><div class="week-grid" id="weekGrid1"></div></div>
+      <div class="week-block"><div class="week-grid" id="weekGrid2"></div></div>
     </section>
   </main>
 </div>
@@ -207,9 +223,9 @@
     <label>Weather location (city, state)</label>
     <input id="locInput" placeholder="e.g. Philadelphia, PA" />
     <div class="hint">Weather updates automatically every 30 minutes.</div>
-    <label>Apple Calendar link (read-only, optional)</label>
-    <input id="icalInput" placeholder="webcal://p##-calendars.icloud.com/..." />
-    <div class="hint">iPhone: Calendar app → tap the calendar → Share Calendar → Public Calendar → Copy Link. Recurring events are expanded automatically. Events show here but can't be edited from the dashboard.</div>
+    <label>Apple Calendar links (read-only, optional)</label>
+    <textarea id="icalInput" rows="3" placeholder="One link per line, e.g.&#10;webcal://p03-calendars.icloud.com/...&#10;webcal://p03-calendars.icloud.com/..." style="width:100%;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:0.85rem;font-family:var(--sans);resize:vertical;"></textarea>
+    <div class="hint">iPhone: Calendar app → tap the ⓘ next to a calendar → Share Calendar → Public Calendar → Copy Link. Repeat per calendar, one link per line above. Recurring events are expanded automatically. Events show here but can't be edited from the dashboard.</div>
     <div class="modal-actions" style="justify-content:space-between;">
       <button class="close" id="changePwBtn">Change Password</button>
       <div style="display:flex;gap:8px;">
@@ -288,7 +304,7 @@ async function initLock(){
 // --- Firebase realtime listeners (auto cross-device sync) ---
 db.ref('dashboard/mealplan').on('value', snap => { if(!anyFieldFocused){ state.mealplan = snap.val() || state.mealplan; renderMeals(); }});
 db.ref('dashboard/shopping').on('value', snap => { state.shopping = snap.val() || []; renderShopping(); });
-db.ref('dashboard/events').on('value', snap => { state.events = snap.val() || {}; renderWeek(); });
+db.ref('dashboard/events').on('value', snap => { state.events = snap.val() || {}; renderCalendar(); });
 db.ref('dashboard/settings').on('value', snap => {
   const v = snap.val();
   if(v){
@@ -296,7 +312,7 @@ db.ref('dashboard/settings').on('value', snap => {
     renderTheme();
     if(v.lat && v.lon){ refreshWeather(); }
     document.getElementById('locVal').textContent = v.locLabel || 'Set location →';
-    if(v.icalUrl){ fetchAppleEvents(); }
+    if((v.icalUrls && v.icalUrls.length) || v.icalUrl){ fetchAppleEvents(); }
   }
 });
 db.ref('.info/connected').on('value', snap => {
@@ -329,16 +345,35 @@ async function refreshWeather(){
   const {lat, lon} = state.settings;
   if(!lat || !lon) return;
   try{
-    const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=auto&forecast_days=1`);
+    const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min,weather_code&temperature_unit=fahrenheit&timezone=auto&forecast_days=7`);
     const data = await res.json();
     state.weather = {
       icon: WEATHER_ICONS[data.current.weather_code] || '🌡️',
       now: Math.round(data.current.temperature_2m),
       hi: Math.round(data.daily.temperature_2m_max[0]),
-      lo: Math.round(data.daily.temperature_2m_min[0])
+      lo: Math.round(data.daily.temperature_2m_min[0]),
+      forecast: data.daily.time.map((d,i)=>({
+        date: d,
+        icon: WEATHER_ICONS[data.daily.weather_code[i]] || '🌡️',
+        hi: Math.round(data.daily.temperature_2m_max[i]),
+        lo: Math.round(data.daily.temperature_2m_min[i])
+      }))
     };
     renderWeather();
   }catch(e){ console.error('weather fetch failed', e); }
+}
+function renderForecastStrip(){
+  const el = document.getElementById('forecastStrip');
+  el.innerHTML = '';
+  const days = state.weather.forecast || [];
+  days.forEach((d,i)=>{
+    const dateObj = new Date(d.date + 'T00:00:00');
+    const label = i===0 ? 'Today' : dateObj.toLocaleDateString([], {weekday:'short'});
+    const item = document.createElement('div');
+    item.className = 'forecast-item';
+    item.innerHTML = `<div class="fday">${label}</div><div class="ficon">${d.icon}</div><div class="fhilo">${d.hi}° / ${d.lo}°</div>`;
+    el.appendChild(item);
+  });
 }
 
 function seasonForDate(d){
@@ -479,21 +514,27 @@ function parseICS(text){
   return events;
 }
 async function fetchAppleEvents(){
-  const url = state.settings.icalUrl;
-  if(!url) { appleEvents = []; return; }
+  const urls = state.settings.icalUrls || (state.settings.icalUrl ? [state.settings.icalUrl] : []);
+  if(!urls.length){ appleEvents = []; renderCalendar(); return; }
   try{
-    const target = toWebFetchable(url);
-    const proxied = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(target);
-    const res = await fetch(proxied);
-    const text = await res.text();
-    appleEvents = parseICS(text);
-    renderWeek();
+    const results = await Promise.all(urls.map(async (url)=>{
+      try{
+        const target = toWebFetchable(url);
+        const proxied = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(target);
+        const res = await fetch(proxied);
+        const text = await res.text();
+        return parseICS(text);
+      }catch(e){ console.error('Apple Calendar fetch failed for one link', e); return []; }
+    }));
+    appleEvents = results.flat();
+    renderCalendar();
   }catch(e){ console.error('Apple Calendar fetch failed', e); }
 }
 function renderWeather(){
   document.getElementById('condIcon').textContent = state.weather.icon;
   document.getElementById('tempVal').textContent = state.weather.now + '°';
   document.getElementById('hiloVal').textContent = `H: ${state.weather.hi}  L: ${state.weather.lo}`;
+  renderForecastStrip();
 }
 function tickClock(){
   const now = new Date();
@@ -538,13 +579,9 @@ function startOfWeek(offset){
 }
 function iso(d){ return d.toISOString().slice(0,10); }
 
-function renderWeek(){
-  const start = startOfWeek(state.weekOffset);
-  const end = new Date(start); end.setDate(end.getDate()+6);
-  document.getElementById('weekLabel').textContent =
-    start.toLocaleDateString([], {month:'short', day:'numeric'}) + ' – ' + end.toLocaleDateString([], {month:'short', day:'numeric'});
-
-  const grid = document.getElementById('weekGrid');
+function renderCalendarBlock(gridId, blockOffset){
+  const start = startOfWeek(blockOffset);
+  const grid = document.getElementById(gridId);
   grid.innerHTML = '';
   const todayIso = iso(new Date());
 
@@ -562,7 +599,7 @@ function renderWeek(){
       evEl.innerHTML = `<span class="del">✕</span><span class="ev-time">${ev.time||''}</span>${ev.text}`;
       evEl.querySelector('.del').addEventListener('click', ()=>{
         delete state.events[key][ev.id];
-        saveEvents(); renderWeek();
+        saveEvents(); renderCalendar();
       });
       evContainer.appendChild(evEl);
     });
@@ -593,13 +630,22 @@ function renderWeek(){
         state.events[key][id] = {id, time:t, text:txt};
         saveEvents();
         anyFieldFocused=false;
-        renderWeek();
+        renderCalendar();
       });
       col.insertBefore(form, addLink);
     });
     col.appendChild(addLink);
     grid.appendChild(col);
   }
+}
+
+function renderCalendar(){
+  const start = startOfWeek(state.weekOffset);
+  const end = new Date(start); end.setDate(end.getDate()+13);
+  document.getElementById('weekLabel').textContent =
+    start.toLocaleDateString([], {month:'short', day:'numeric'}) + ' – ' + end.toLocaleDateString([], {month:'short', day:'numeric'});
+  renderCalendarBlock('weekGrid1', state.weekOffset);
+  renderCalendarBlock('weekGrid2', state.weekOffset+1);
 }
 
 // ---- controls ----
@@ -614,14 +660,14 @@ document.getElementById('shopInput').addEventListener('keydown', (e)=>{ if(e.key
 document.getElementById('shopInput').addEventListener('focus', ()=>anyFieldFocused=true);
 document.getElementById('shopInput').addEventListener('blur', ()=>anyFieldFocused=false);
 
-document.getElementById('prevWeek').addEventListener('click', ()=>{state.weekOffset--; renderWeek();});
-document.getElementById('nextWeek').addEventListener('click', ()=>{state.weekOffset++; renderWeek();});
-document.getElementById('thisWeek').addEventListener('click', ()=>{state.weekOffset=0; renderWeek();});
+document.getElementById('prevWeek').addEventListener('click', ()=>{state.weekOffset-=2; renderCalendar();});
+document.getElementById('nextWeek').addEventListener('click', ()=>{state.weekOffset+=2; renderCalendar();});
+document.getElementById('thisWeek').addEventListener('click', ()=>{state.weekOffset=0; renderCalendar();});
 
 document.getElementById('gearBtn').addEventListener('click', ()=>{
   document.getElementById('themeSelect').value = state.settings.theme || 'auto';
   document.getElementById('locInput').value = state.settings.locLabel || '';
-  document.getElementById('icalInput').value = state.settings.icalUrl || '';
+  document.getElementById('icalInput').value = (state.settings.icalUrls || (state.settings.icalUrl ? [state.settings.icalUrl] : [])).join('\n');
   document.getElementById('modalBg').classList.add('open');
 });
 document.getElementById('weatherBox').addEventListener('click', ()=>document.getElementById('gearBtn').click());
@@ -646,7 +692,8 @@ document.getElementById('modalSave').addEventListener('click', async ()=>{
     const geo = await geocode(locText);
     if(geo){ state.settings.lat = geo.lat; state.settings.lon = geo.lon; state.settings.locLabel = geo.label; }
   }
-  state.settings.icalUrl = document.getElementById('icalInput').value.trim();
+  state.settings.icalUrls = document.getElementById('icalInput').value
+    .split('\n').map(s=>s.trim()).filter(Boolean);
   saveSettings();
   document.getElementById('modalBg').classList.remove('open');
   renderTheme();
