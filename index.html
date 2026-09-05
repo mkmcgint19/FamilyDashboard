@@ -69,7 +69,8 @@
   .weather .loc{font-size:0.72rem; opacity:0.6;}
   .season-tag{ font-family:var(--serif); font-style:italic; font-size:1rem; opacity:0.8; text-align:right; }
   .gear{ width:2.4rem; height:2.4rem; border-radius:50%; border:1px solid var(--line); background:var(--panel); display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:1.2rem; color:var(--ink); }
-  main{ display:grid; grid-template-columns:1.1fr 1fr 1.9fr; gap:1.8vw; min-height:0; }
+  main{ display:grid; grid-template-rows:auto 1fr; gap:1.8vh; min-height:0; }
+  .top-row{ display:grid; grid-template-columns:1fr 1fr; gap:1.8vw; }
   .panel{ background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:1.4vh 1.3vw; display:flex; flex-direction:column; min-height:0; overflow:auto; }
   .panel h2{ font-family:var(--serif); font-weight:normal; font-size:1.15rem; margin:0 0 0.8em 0; padding-bottom:0.5em; border-bottom:1px solid var(--line); }
   .meal-row{display:grid; grid-template-columns:5.2em 1fr; gap:8px; padding:5px 0; align-items:start;}
@@ -111,6 +112,7 @@
   .modal-actions .save{background:var(--accent,#555); color:#fff;}
   .conn-warn{position:fixed; bottom:10px; left:10px; font-size:0.7rem; background:#d33; color:#fff; padding:4px 8px; border-radius:4px; display:none;}
   .ev.apple{background:rgba(255,255,255,0.4); border-left:2px solid var(--accent);}
+  .cal-dot{ display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:middle; }
 
   /* ---- Password lock screen ---- */
   .lock-screen{ position:fixed; inset:0; z-index:200; display:none; align-items:center; justify-content:center;
@@ -127,6 +129,7 @@
   body.portrait .season-tag{ order:5; font-size:0.8rem; }
   body.portrait .gear{ order:6; }
   body.portrait main{ grid-template-columns:1fr; grid-auto-rows:auto; row-gap:1.6vh; }
+  body.portrait .top-row{ grid-template-columns:1fr; row-gap:1.6vh; }
   body.portrait .panel{ max-height:none; }
   body.portrait .week-grid{ display:flex; flex-direction:column; gap:8px; }
   body.portrait .day-col{ flex-direction:row; align-items:flex-start; gap:12px; }
@@ -180,19 +183,21 @@
   <div class="forecast-strip" id="forecastStrip"></div>
 
   <main>
-    <section class="panel" id="mealPanel">
-      <h2>Dinner This Week</h2>
-      <div id="mealList"></div>
-    </section>
+    <div class="top-row">
+      <section class="panel" id="mealPanel">
+        <h2>Dinner This Week</h2>
+        <div id="mealList"></div>
+      </section>
 
-    <section class="panel" id="shopPanel">
-      <h2>Shopping List</h2>
-      <div class="shop-add">
-        <input id="shopInput" placeholder="Add item…" />
-        <button id="shopAddBtn">Add</button>
-      </div>
-      <div id="shopList"></div>
-    </section>
+      <section class="panel" id="shopPanel">
+        <h2>Shopping List</h2>
+        <div class="shop-add">
+          <input id="shopInput" placeholder="Add item…" />
+          <button id="shopAddBtn">Add</button>
+        </div>
+        <div id="shopList"></div>
+      </section>
+    </div>
 
     <section class="panel" id="calPanel">
       <div class="week-head">
@@ -404,6 +409,19 @@ function toWebFetchable(url){
   return url.trim().replace(/^webcal:\/\//i, 'https://');
 }
 function ymd(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function formatTime12(hhmm){
+  if(!hhmm) return '';
+  const [h,m] = hhmm.split(':').map(Number);
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(m).padStart(2,'0')} ${period}`;
+}
+const FEED_COLORS = ['#b06fae','#3f9c8e','#b5602f','#4a6386','#c9784a','#7a9e5b','#a15c7e'];
+function extractFeedColor(icsText, fallbackIndex){
+  const m = icsText.match(/X-APPLE-CALENDAR-COLOR:(#[0-9A-Fa-f]{6,8})/) || icsText.match(/\nCOLOR:(#[0-9A-Fa-f]{6,8})/);
+  if(m) return m[1].slice(0,7);
+  return FEED_COLORS[fallbackIndex % FEED_COLORS.length];
+}
 function parseICSDate(raw){
   raw = raw.replace('Z','');
   const y=+raw.slice(0,4), mo=+raw.slice(4,6)-1, da=+raw.slice(6,8);
@@ -517,13 +535,14 @@ async function fetchAppleEvents(){
   const urls = state.settings.icalUrls || (state.settings.icalUrl ? [state.settings.icalUrl] : []);
   if(!urls.length){ appleEvents = []; renderCalendar(); return; }
   try{
-    const results = await Promise.all(urls.map(async (url)=>{
+    const results = await Promise.all(urls.map(async (url, idx)=>{
       try{
         const target = toWebFetchable(url);
         const proxied = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(target);
         const res = await fetch(proxied);
         const text = await res.text();
-        return parseICS(text);
+        const color = extractFeedColor(text, idx);
+        return parseICS(text).map(ev => ({...ev, color}));
       }catch(e){ console.error('Apple Calendar fetch failed for one link', e); return []; }
     }));
     appleEvents = results.flat();
@@ -543,7 +562,7 @@ function tickClock(){
 }
 
 function renderMeals(){
-  const order = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const order = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const el = document.getElementById('mealList');
   el.innerHTML = '';
   order.forEach(day=>{
@@ -596,7 +615,7 @@ function renderCalendarBlock(gridId, blockOffset){
     Object.values(state.events[key]||{}).sort((a,b)=>(a.time||'').localeCompare(b.time||'')).forEach(ev=>{
       const evEl = document.createElement('div');
       evEl.className = 'ev';
-      evEl.innerHTML = `<span class="del">✕</span><span class="ev-time">${ev.time||''}</span>${ev.text}`;
+      evEl.innerHTML = `<span class="del">✕</span><span class="ev-time">${formatTime12(ev.time)}</span>${ev.text}`;
       evEl.querySelector('.del').addEventListener('click', ()=>{
         delete state.events[key][ev.id];
         saveEvents(); renderCalendar();
@@ -607,7 +626,8 @@ function renderCalendarBlock(gridId, blockOffset){
     appleEvents.filter(ev=>ev.dateKey===key).sort((a,b)=>(a.time||'').localeCompare(b.time||'')).forEach(ev=>{
       const evEl = document.createElement('div');
       evEl.className = 'ev apple';
-      evEl.innerHTML = `<span class="ev-time">${ev.time||''}</span>${ev.text}`;
+      evEl.style.borderLeftColor = ev.color || 'var(--accent)';
+      evEl.innerHTML = `<span class="cal-dot" style="background:${ev.color||'var(--accent)'}"></span><span class="ev-time">${formatTime12(ev.time)}</span>${ev.text}`;
       evContainer.appendChild(evEl);
     });
 
